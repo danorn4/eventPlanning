@@ -101,14 +101,6 @@ Each question sends roughly 1,500 to 3,000 tokens and gets back a few hundred, a
 - **Vague requests** like "something cozy and rustic" have nothing in the schema to match.
 - **Read-only.** It cannot create events or bookings.
 
-## Ideas for going further
-
-- Load distinct categories, cities, and counties into the prompt, or use fuzzy matching (`pg_trgm`) to fix typos.
-- Add conversation memory so follow-up questions work.
-- Use embeddings (`pgvector`) for style-based search, like "cozy and rustic".
-- Add a wishlist/board feature and a web frontend.
-- Let users create bookings through separate, tightly controlled code with its own write permissions.
-
 ## Security notes
 
 Never commit `.env`. If a key or password is ever exposed, rotate it immediately (OpenAI dashboard for keys, Supabase Project Settings, then Database, for the database password).
