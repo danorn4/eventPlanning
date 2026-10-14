@@ -5,6 +5,7 @@ Flow: question -> LLM writes SQL -> run it as the read-only role -> LLM turns th
 Usage:
     python nl_query.py                                  # interactive, single_domain strategy
     python nl_query.py --strategy zero_shot             # zero_shot | single_domain | cross_domain
+    python nl_query.py --strategy zero_shot --no-notes  # schema only, like the paper's zero-shot
     python nl_query.py -q "Which DJs are in Provo?"     # one question, then exit
 
 Needs in .env: DATABASE_URL_READONLY, OPENAI_API_KEY, OPENAI_MODEL
@@ -143,8 +144,8 @@ def get_schema_text(conn):
     return "\n".join(out)
 
 
-def build_prompt(schema, question, strategy):
-    parts = [schema, NOTES]
+def build_prompt(schema, question, strategy, use_notes=True):
+    parts = [schema] + ([NOTES] if use_notes else [])
     if strategy == "single_domain":
         parts.append(SINGLE_DOMAIN_EXAMPLES)
     elif strategy == "cross_domain":
@@ -196,14 +197,15 @@ def run_sql(conn, sql):
     return rows[:MAX_ROWS], truncated
 
 
-def ask(client, conn, schema, question, strategy):
+def ask(client, conn, schema, question, strategy, use_notes=True):
     usage = Usage()
     system = ("You are an expert PostgreSQL query writer. Reply with only the SQL query: "
               "no explanation, no markdown fences.")
     entry = {"time": datetime.now().isoformat(timespec="seconds"), "question": question,
-             "strategy": strategy, "sql": None, "success": False, "error": None}
+             "strategy": strategy, "use_notes": use_notes, "sql": None, "success": False,
+             "error": None}
 
-    prompt = build_prompt(schema, question, strategy)
+    prompt = build_prompt(schema, question, strategy, use_notes)
     sql = clean_sql(chat(client, SQL_MODEL, system, prompt, usage))
     rows, truncated, error = None, False, None
 
@@ -238,7 +240,7 @@ def ask(client, conn, schema, question, strategy):
         entry["success"] = True
         entry["row_count"] = len(rows)
 
-    entry.update(prompt_tokens=usage.prompt, completion_tokens=usage.completion,
+    entry.update(retried=(attempt == 1), prompt_tokens=usage.prompt, completion_tokens=usage.completion,
                  est_cost_usd=round(usage.cost(), 6))
     with open(LOG_FILE, "a") as f:
         f.write(json.dumps(entry) + "\n")
@@ -261,6 +263,8 @@ def main():
     p.add_argument("--strategy", choices=["zero_shot", "single_domain", "cross_domain"],
                    default="single_domain")
     p.add_argument("-q", "--question")
+    p.add_argument("--no-notes", action="store_true",
+                   help="leave the NOTES block out of the prompt (schema + examples only, like the paper)")
     args = p.parse_args()
 
     missing = [n for n, v in [("DATABASE_URL_READONLY", DB_URL), ("OPENAI_API_KEY", os.getenv("OPENAI_API_KEY")),
@@ -272,9 +276,10 @@ def main():
     client = OpenAI()
     with psycopg.connect(DB_URL, row_factory=dict_row) as conn:
         schema = get_schema_text(conn)
-        print(f"Strategy: {args.strategy}  |  Model: {SQL_MODEL}")
+        use_notes = not args.no_notes
+        print(f"Strategy: {args.strategy}  |  Notes: {'on' if use_notes else 'off'}  |  Model: {SQL_MODEL}")
         if args.question:
-            show(*ask(client, conn, schema, args.question, args.strategy))
+            show(*ask(client, conn, schema, args.question, args.strategy, use_notes))
             return
         print("Ask a question about vendors, events, and bookings (type 'quit' to exit).")
         while True:
@@ -282,7 +287,7 @@ def main():
             if q.lower() in ("quit", "exit", "q"):
                 break
             if q:
-                show(*ask(client, conn, schema, q, args.strategy))
+                show(*ask(client, conn, schema, q, args.strategy, use_notes))
 
 
 if __name__ == "__main__":
